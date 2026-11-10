@@ -1,0 +1,62 @@
+name: Atualizar painel
+
+# Roda quando uma planilha nova chega em dados/ (ou o modelo/script muda),
+# e também pelo botão "Run workflow" na aba Actions.
+on:
+  push:
+    paths:
+      - "dados/**.xlsx"
+      - "modelo/**"
+      - "scripts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atualizar-painel
+  cancel-in-progress: false
+
+jobs:
+  gerar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o repositório
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Escolher a planilha
+        id: planilha
+        run: |
+          shopt -s nullglob
+          arquivos=(dados/*.xlsx)
+          if [ ${#arquivos[@]} -eq 0 ]; then
+            echo "::error::Nenhuma planilha .xlsx na pasta dados/."; exit 1
+          elif [ ${#arquivos[@]} -eq 1 ]; then
+            f="${arquivos[0]}"
+          else
+            # mais de uma: usa a enviada por último
+            f="$(git log -1 --name-only --pretty=format: -- 'dados/*.xlsx' | grep -m1 '\.xlsx$')"
+            echo "::warning::Há ${#arquivos[@]} planilhas em dados/. Usando a enviada por último: $f"
+          fi
+          echo "arquivo=$f" >> "$GITHUB_OUTPUT"
+          echo "Planilha: $f"
+
+      - name: Conferir a planilha
+        run: python3 scripts/plante.py conferir "${{ steps.planilha.outputs.arquivo }}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Gerar o painel
+        run: python3 scripts/plante.py painel "${{ steps.planilha.outputs.arquivo }}" modelo/Painel_Plante_modelo.html index.html
+
+      - name: Publicar
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          if git diff --cached --quiet; then
+            echo "Painel sem mudanças."
+          else
+            git commit -m "Atualiza o painel com $(basename "${{ steps.planilha.outputs.arquivo }}")"
+            git push
+          fi
