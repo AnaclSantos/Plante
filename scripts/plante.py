@@ -23,8 +23,10 @@ ABAS = {  # aba -> (chave nos dados, tabela, colunas obrigatórias)
     'MensagensPNE': ('mensagens', 'tbMensagensPNE', ['id_Linha', 'Pagina_Rota', 'Acoes', 'Mensagem']),
     'InstrumentosFinanceiros': ('instrumentos', 'tbInstrumentos', ['id_Linha', 'Instrumento']),
     'Indicadores': ('indicadores', 'tbIndicadores', ['id_Linha', 'Indicador', 'Tipo', 'Fonte', 'Memoria_Calculo']),
+    'SerieHistorica': ('serie', 'tbSerieHistorica', ['id_Linha', 'Indicador', 'Serie', 'Ano', 'Valor', 'Unidade', 'Fonte']),
     'Glossario': ('glossario', 'tbGlossario', ['Sigla', 'Nome']),
 }
+OPCIONAIS = {'SerieHistorica'}  # abas que podem faltar (o painel só deixa de mostrar o que vem delas)
 
 
 def col_idx(ref):
@@ -104,7 +106,8 @@ def conferir(caminho):
     problemas, avisos = [], []
     for aba, (chave, tab, cols) in ABAS.items():
         if aba not in abas:
-            problemas.append(f'Falta a aba **{aba}**.'); continue
+            if aba not in OPCIONAIS: problemas.append(f'Falta a aba **{aba}**.')
+            continue
         nomes = registros(abas[aba])[0]
         faltam = [c for c in cols if c not in nomes]
         if faltam:
@@ -127,6 +130,25 @@ def conferir(caminho):
         if not i and not f: sem_ano += 1
         elif (i and not 2025 <= i <= 2029) or (f and not 2025 <= f <= 2029): fora += 1
         elif i and f and f < i: invert.append(c)
+    por_cod = {txt(r.get('Codigo')): r for r in d['iniciativas']}
+    nb_ruim = []
+    for r in d['iniciativas']:
+        nb = txt(r.get('Na_Barra'))
+        if not nb: continue
+        c = txt(r.get('Codigo'))
+        m = re.match(r'^#([^:]+):(\d{4})-(\d{4})(:S)?$', nb, re.I)
+        if m: continue
+        b = por_cod.get(nb)
+        if not b or txt(b.get('id_Acao')) != txt(r.get('id_Acao')) or txt(b.get('Tipo')).lower() != 'barra': nb_ruim.append(f'{c} → {nb}')
+    if nb_ruim: avisos.append('Na_Barra que não aponta para uma barra da mesma ação (o marco fica solto na rota): ' + ', '.join(nb_ruim[:8]) + ('…' if len(nb_ruim) > 8 else '') + '.')
+    ind_chaves = {(txt(r.get('id_Linha')), txt(r.get('Indicador'))) for r in d['indicadores']}
+    sem_ind, sem_num = set(), 0
+    for r in d.get('serie', []):
+        if (txt(r.get('id_Linha')), txt(r.get('Indicador'))) not in ind_chaves: sem_ind.add(f"{txt(r.get('id_Linha'))} {txt(r.get('Indicador'))[:50]}")
+        try: float(txt(r.get('Valor')).replace(',', '.')); int(float(txt(r.get('Ano'))))
+        except ValueError: sem_num += 1
+    if sem_ind: avisos.append('SerieHistorica com indicador que não está igual na aba Indicadores (a série não aparece): ' + '; '.join(sorted(sem_ind)) + '.')
+    if sem_num: avisos.append(f'SerieHistorica: {sem_num} linha(s) sem Ano ou Valor numérico (ficam fora do gráfico).')
     dup = [c for c, n in codigos.items() if n > 1]
     if dup: problemas.append('Códigos de iniciativa repetidos: ' + ', '.join(dup[:8]) + ('…' if len(dup) > 8 else '') + '.')
     if sem_ano: avisos.append(f'{sem_ano} iniciativa(s) sem Ano_Inicio e Ano_Fim: ficam fora do Gantt.')
@@ -136,12 +158,12 @@ def conferir(caminho):
     falta_ind = sorted(linhas - lin_ind)
     if falta_ind: avisos.append('Linhas sem indicador: ' + ', '.join(falta_ind) + '.')
     sug = sum(1 for r in d['iniciativas'] if txt(r.get('Sugestao')).lower() in ('sim', 's', 'x', '1', 'true'))
-    out = ['## Conferência da planilha do Plante (V2)', '',
+    out = ['## Conferência da planilha do Plante', '',
            f'**Resultado:** {"pronta para gerar o painel" if not problemas else "corrigir antes de gerar"} ({len(problemas)} problema(s), {len(avisos)} aviso(s)).', '',
            '| Item | Total |', '| --- | --- |',
            f'| Linhas de ação | {len(linhas)} |', f'| Ações | {len(acoes)} |', f'| Iniciativas | {len(d["iniciativas"])} |',
            f'| Iniciativas sugeridas | {sug} |', f'| Mensagens PNE | {len(d["mensagens"])} |',
-           f'| Instrumentos financeiros | {len(d["instrumentos"])} |', f'| Indicadores | {len(d["indicadores"])} |',
+           f'| Instrumentos financeiros | {len(d["instrumentos"])} |', f'| Indicadores | {len(d["indicadores"])} |', f'| Série histórica (linhas) | {len(d.get("serie", []))} |',
            f'| Siglas no glossário | {len(d["glossario"])} |', '']
     if problemas: out += ['### Problemas', ''] + [f'- {p}' for p in problemas[:40]] + ['']
     if avisos: out += ['### Avisos', ''] + [f'- {a}' for a in avisos] + ['']
